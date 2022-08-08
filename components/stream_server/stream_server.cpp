@@ -25,12 +25,14 @@
 
 
 static const char *TAG = "streamserver";
+static const int BUF_SIZE = 128;
 
 using namespace esphome;
 
 void StreamServerComponent::setup() {
     ESP_LOGCONFIG(TAG, "Setting up stream server...");
-    this->recv_buf_.reserve(128);
+    this->recv_buf_.reserve(BUF_SIZE);
+    this->send_buf_.reserve(BUF_SIZE);
 
     this->server_ = AsyncServer(this->port_);
     this->server_.begin();
@@ -49,15 +51,38 @@ void StreamServerComponent::loop() {
 }
 
 void StreamServerComponent::cleanup() {
-    auto discriminator = [](std::unique_ptr<Client> &client) { return !client->disconnected; };
-    auto last_client = std::partition(this->clients_.begin(), this->clients_.end(), discriminator);
-    for (auto it = last_client; it != this->clients_.end(); it++)
-        ESP_LOGD(TAG, "Client %s disconnected", (*it)->identifier.c_str());
+  int count;
 
-    this->clients_.erase(last_client, this->clients_.end());
+    // find first disconnected, and then rewrite rest to keep order
+    // to keep `send_client_` be correct
+    for (count = 0; count < this->clients_.size(); ++count) {
+        if (this->clients_[count]->disconnected)
+            break;
+    }
+
+    for (int i = count; i < this->clients_.size(); ++i) {
+        auto& client = this->clients_[i];
+
+        if (!client->disconnected) {
+            this->clients_[count++].swap(client);
+            continue;
+        }
+
+        ESP_LOGD(TAG, "Client %s disconnected", this->clients_[i]->identifier.c_str());
+
+        if (this->send_client_ > i) {
+            this->send_client_--;
+        }
+    }
+
+    this->clients_.resize(count);   
 }
 
 void StreamServerComponent::read() {
+    if (!this->flush()) {
+        return;
+    }
+    
     int len;
     while ((len = this->stream_->available()) > 0) {
         char buf[128];
