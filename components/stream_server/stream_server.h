@@ -16,14 +16,8 @@
 
 #pragma once
 
-#include "esphome/core/version.h"
 #include "esphome/core/component.h"
 #include "esphome/components/uart/uart.h"
-
-// Provide VERSION_CODE for ESPHome versions lacking it, as existence checking doesn't work for function-like macros
-#ifndef VERSION_CODE
-#define VERSION_CODE(major, minor, patch) ((major) << 16 | (minor) << 8 | (patch))
-#endif
 
 #include <memory>
 #include <string>
@@ -33,21 +27,13 @@
 #ifdef ARDUINO_ARCH_ESP8266
 #include <ESPAsyncTCP.h>
 #else
-// AsyncTCP.h includes parts of freertos, which require FreeRTOS.h header to be included first
-#include <freertos/FreeRTOS.h>
 #include <AsyncTCP.h>
-#endif
-
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2021, 10, 0)
-using SSStream = esphome::uart::UARTComponent;
-#else
-using SSStream = Stream;
 #endif
 
 class StreamServerComponent : public esphome::Component {
 public:
     StreamServerComponent() = default;
-    explicit StreamServerComponent(SSStream *stream) : stream_{stream} {}
+    explicit StreamServerComponent(Stream *stream) : stream_{stream} {}
     void set_uart_parent(esphome::uart::UARTComponent *parent) { this->stream_ = parent; }
 
     void setup() override;
@@ -62,6 +48,7 @@ public:
 protected:
     void cleanup();
     void read();
+    bool flush();
     void write();
 
     struct Client {
@@ -73,9 +60,11 @@ protected:
         bool disconnected{false};
     };
 
-    SSStream *stream_{nullptr};
+    Stream *stream_{nullptr};
     AsyncServer server_{0};
     uint16_t port_{6638};
+    std::vector<char> send_buf_{};
+    int send_client_{0};
     std::vector<uint8_t> recv_buf_{};
     std::vector<std::unique_ptr<Client>> clients_{};
 };
