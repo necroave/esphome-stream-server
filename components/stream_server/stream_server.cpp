@@ -19,11 +19,6 @@
 #include "esphome/core/log.h"
 #include "esphome/core/util.h"
 
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2021, 10, 0)
-#include "esphome/components/network/util.h"
-#endif
-
-
 static const char *TAG = "streamserver";
 static const int BUF_SIZE = 128;
 
@@ -51,7 +46,7 @@ void StreamServerComponent::loop() {
 }
 
 void StreamServerComponent::cleanup() {
-  int count;
+    int count;
 
     // find first disconnected, and then rewrite rest to keep order
     // to keep `send_client_` be correct
@@ -75,50 +70,57 @@ void StreamServerComponent::cleanup() {
         }
     }
 
-    this->clients_.resize(count);   
+    this->clients_.resize(count);
 }
 
 void StreamServerComponent::read() {
     if (!this->flush()) {
         return;
     }
-    
+
     int len;
     while ((len = this->stream_->available()) > 0) {
-        char buf[128];
-        len = std::min(len, 128);
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2021, 10, 0)
-        this->stream_->read_array(reinterpret_cast<uint8_t*>(buf), len);
-#else
-        this->stream_->readBytes(buf, len);
-#endif
-        for (auto const& client : this->clients_)
-            client->tcp_client->write(buf, len);
+        this->send_buf_.resize(BUF_SIZE);
+        size_t read = this->stream_->readBytes(this->send_buf_.data(), min(len, BUF_SIZE));
+        this->send_buf_.resize(read);
+        this->send_client_ = 0;
+
+        if (!this->flush()) {
+            break;
+        }
     }
 }
 
+bool StreamServerComponent::flush() {
+    if (this->send_buf_.empty()) {
+        return true;
+    }
+
+    for ( ; this->send_client_ < this->clients_.size(); this->send_client_++) {
+        auto const& client = this->clients_[this->send_client_];
+
+        // client overflow
+        if (!client->tcp_client->write(this->send_buf_.data(), this->send_buf_.size())) {
+            return false;
+        }
+    }
+
+    this->send_buf_.resize(0);
+    this->send_client_ = 0;
+    return true;
+}
+
 void StreamServerComponent::write() {
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2021, 10, 0)
-    this->stream_->write_array(this->recv_buf_);
-    this->recv_buf_.clear();
-#else
     size_t len;
     while ((len = this->recv_buf_.size()) > 0) {
-        this->stream_->write(this->recv_buf_.data(), len);
+        len = this->stream_->write(this->recv_buf_.data(), len);
         this->recv_buf_.erase(this->recv_buf_.begin(), this->recv_buf_.begin() + len);
     }
-#endif
 }
 
 void StreamServerComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "Stream Server:");
-    ESP_LOGCONFIG(TAG, "  Address: %s:%u",
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2021, 10, 0)
-                  esphome::network::get_ip_address().str().c_str(),
-#else
-                  network_get_address().c_str(),
-#endif
-                  this->port_);
+    ESP_LOGCONFIG(TAG, "  Address: %s:%u", network_get_address().c_str(), this->port_);
 }
 
 void StreamServerComponent::on_shutdown() {
